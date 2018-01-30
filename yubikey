@@ -9,9 +9,10 @@ fi
 
 # Double checking if the Yubikey is actually removed,
 # Challenge-Response won't trigger the screensaver this way.
+LOCK_TIMEOUT='30'
 
 # tested with just 1 user at the moment
-USERNAME="$(who -u | awk '{print $1}' | sort | uniq)"
+username="$(who -u | awk '{print $1}' | sort | uniq)"
 uid=$(id -u "$USERNAME")
 
 # get D-bus session
@@ -20,24 +21,20 @@ export DBUS_SESSION_BUS_ADDRESS
 export DISPLAY=':0'
 
 # delete the lock if older than 30 minutes
-find "/run/user/$uid" -type f \
-                      -name 'yubikey-lock-screen' \
-                      -empty \
-                      -cmin +30 \
-                      -exec rm "{}" \;
+find "/run/user/$uid/yubikey-lock-screen"
+  -type f -empty -cmin +"$LOCK_TIMEOUT" -exec rm "{}" \; || true
 
-dbus_reply=$(/bin/su $USERNAME -c 'dbus-send --print-reply \
-                   --reply-timeout=2000 \
-                   --dest=com.canonical.Unity \
-                   /com/canonical/Unity/Session \
-                   com.canonical.Unity.Session.IsLocked | \
-                   grep true || false' )
-[ ! -z "$dbus_reply" ] && screen_locked=true || screen_locked=false
-# logger "[yubikey] screen_locked: $screen_locked"
+screen_locked=$(/bin/su $USERNAME -c \
+                  'dbus-send --print-reply \
+                             --dest=com.canonical.Unity \
+                             /com/canonical/Unity/Session \
+                             com.canonical.Unity.Session.IsLocked | \
+                      grep -q "true" && echo true || echo false' )
+logger "[yubikey] screen_locked: $screen_locked"
 
 yubicokeys=$(lsusb | grep 'Yubico' | \
                      awk -F':' '{print $1}' | \
-                     sed -r 's#Bus ([0-9]+) Device ([0-9]+)#\1:\2#g')
+                     sed -r 's#Bus ([0-9]+) Device ([0-9]+)#\1:\2#g' || true )
 key_is_authorized=false
 found_key=false
 
@@ -55,7 +52,7 @@ if [ ! -z "$yubicokeys" ]; then
   done
 
   if $key_is_authorized; then
-    logger "[yubikey] yubiKey: ID_SERIAL_SHORT: $ID_SERIAL_SHORT - key authorized"
+    logger "[yubikey] yubiKey: ID_SERIAL_SHORT: $serialno - key authorized"
     found_key=true
   fi
 else
@@ -81,7 +78,7 @@ if ! $found_key; then
 else
   logger "[yubikey] yubiKey found, unlocking screensaver if found"
 
-  # does not work with the new Unity lock screen
+  # does not work with Unity's lock screen
   # Running the screensaver unlock command
   # /bin/su $USERNAME \
   #  -c "/usr/bin/gnome-screensaver-command --deactivate"
@@ -90,9 +87,9 @@ else
     logger "[yubikey] screen was locked with yubikey"
 
     if $screen_locked; then
+      # unlocks all sessions, ok if there is only one user
       logger "[yubikey] unlocking screen"
-      /bin/su $USERNAME \
-        -c 'loginctl unlock-session'
+      loginctl unlock-sessions
     fi
 
     rm -f "/run/user/$uid/yubikey-lock-screen"
