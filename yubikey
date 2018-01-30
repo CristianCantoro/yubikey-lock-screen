@@ -3,11 +3,19 @@
 # Challenge-Response won't trigger the screensaver this way.
 
 USERNAME="cristian"
+uid=$(id -u "$USERNAME")
 
 # get D-bus session
-source "/run/user/$(id -u "$USERNAME")/dbus-session"
+source "/run/user/$uid/dbus-session"
 export DBUS_SESSION_BUS_ADDRESS
 export DISPLAY=':0'
+
+# delete the lock if older than 30 minutes
+find "/run/user/$uid" -type f \
+                      -name 'yubikey-lock-screen' \
+                      -empty \
+                      -cmin +30 \
+                      -exec rm "{}" \;
 
 dbus_reply=$(/bin/su $USERNAME -c 'dbus-send --print-reply \
                    --reply-timeout=2000 \
@@ -21,43 +29,50 @@ dbus_reply=$(/bin/su $USERNAME -c 'dbus-send --print-reply \
 keyname="$(lsusb | grep -e 'Yubico')"
 [ ! -z "$keyname" ] && found_key=true || found_key=false
 
-# if result is 
-if ! $found_key; then
-  logger "[yubikey] yubiKey removed or changed"
+key_is_authorized=$(grep  \
+                      "$ID_SERIAL_SHORT" \
+                      /home/$USERNAME/.yubico/authorized_yubikeys >/dev/null \
+                    && true || false)
 
-  if ! $screen_locked; then
-    logger "[yubikey] locking screen"
+if $key_is_authorized; then
+  logger "[yubikey] yubiKey: ID_SERIAL_SHORT: $ID_SERIAL_SHORT - key authorized"
+  if ! $found_key; then
+    logger "[yubikey] yubiKey removed or changed"
 
-    # Running the screensaver lock command
-    /bin/su $USERNAME \
-      -c "/usr/bin/gnome-screensaver-command --lock"
+    if ! $screen_locked; then
+      logger "[yubikey] locking screen"
 
-    touch "/run/user/$(id -u "$USERNAME")/yubikey-lock-screen"
+      # Running the screensaver lock command
+      /bin/su $USERNAME \
+        -c "/usr/bin/gnome-screensaver-command --lock"
 
-  else
-    logger "[yubikey] screen already locked, doing nothing"
-  fi
+      touch "/run/user/$uid/yubikey-lock-screen"
 
-else
-  logger "[yubikey] yubiKey found, unlocking screensaver if found"
-
-  # does not work with the new Unity lock screen 
-  # Running the screensaver unlock command
-  # /bin/su $USERNAME \
-  #  -c "/usr/bin/gnome-screensaver-command --deactivate"
-
-  if [ -f "/run/user/$(id -u "$USERNAME")/yubikey-lock-screen" ]; then
-    logger "[yubikey] screen was locked with yubikey"
-
-    if $screen_locked; then
-      logger "[yubikey] unlocking screen"
-      loginctl unlock-sessions
+    else
+      logger "[yubikey] screen already locked, doing nothing"
     fi
 
-    rm -f "/run/user/$(id -u "$USERNAME")/yubikey-lock-screen"
   else
-    logger "[yubikey] screen was not locked with yubikey"
+    logger "[yubikey] yubiKey found, unlocking screensaver if found"
+
+    # does not work with the new Unity lock screen
+    # Running the screensaver unlock command
+    # /bin/su $USERNAME \
+    #  -c "/usr/bin/gnome-screensaver-command --deactivate"
+
+    if [ -f "/run/user/$uid/yubikey-lock-screen" ]; then
+      logger "[yubikey] screen was locked with yubikey"
+
+      if $screen_locked; then
+        logger "[yubikey] unlocking screen"
+        loginctl unlock-sessions
+      fi
+
+      rm -f "/run/user/$uid/yubikey-lock-screen"
+    else
+      logger "[yubikey] screen was not locked with yubikey"
+
+    fi
 
   fi
-
 fi
