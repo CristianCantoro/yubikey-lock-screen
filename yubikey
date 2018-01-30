@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# Double checking if the Yubikey is actually removed,
+# Challenge-Response won't trigger the screensaver this way.
+
+USERNAME="cristian"
+
+# get D-bus session
+source "/run/user/$(id -u "$USERNAME")/dbus-session"
+export DBUS_SESSION_BUS_ADDRESS
+export DISPLAY=':0'
+
+dbus_reply=$(/bin/su $USERNAME -c 'dbus-send --print-reply \
+                   --reply-timeout=2000 \
+                   --dest=com.canonical.Unity \
+                   /com/canonical/Unity/Session \
+                   com.canonical.Unity.Session.IsLocked | \
+                   grep true || false' )
+[ ! -z "$dbus_reply" ] && screen_locked=true || screen_locked=false
+# logger "[yubikey] screen_locked: $screen_locked"
+
+keyname="$(lsusb | grep -e 'Yubico')"
+[ ! -z "$keyname" ] && found_key=true || found_key=false
+
+# if result is 
+if ! $found_key; then
+  logger "[yubikey] yubiKey removed or changed"
+
+  if ! $screen_locked; then
+    logger "[yubikey] locking screen"
+
+    # Running the screensaver lock command
+    /bin/su $USERNAME \
+      -c "/usr/bin/gnome-screensaver-command --lock"
+
+    touch "/run/user/$(id -u "$USERNAME")/yubikey-lock-screen"
+
+  else
+    logger "[yubikey] screen already locked, doing nothing"
+  fi
+
+else
+  logger "[yubikey] yubiKey found, unlocking screensaver if found"
+
+  # does not work with the new Unity lock screen 
+  # Running the screensaver unlock command
+  # /bin/su $USERNAME \
+  #  -c "/usr/bin/gnome-screensaver-command --deactivate"
+
+  if [ -f "/run/user/$(id -u "$USERNAME")/yubikey-lock-screen" ]; then
+    logger "[yubikey] screen was locked with yubikey"
+
+    if $screen_locked; then
+      logger "[yubikey] unlocking screen"
+      loginctl unlock-sessions
+    fi
+
+    rm -f "/run/user/$(id -u "$USERNAME")/yubikey-lock-screen"
+  else
+    logger "[yubikey] screen was not locked with yubikey"
+
+  fi
+
+fi
