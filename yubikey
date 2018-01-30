@@ -26,53 +26,69 @@ dbus_reply=$(/bin/su $USERNAME -c 'dbus-send --print-reply \
 [ ! -z "$dbus_reply" ] && screen_locked=true || screen_locked=false
 # logger "[yubikey] screen_locked: $screen_locked"
 
-keyname="$(lsusb | grep -e 'Yubico')"
-[ ! -z "$keyname" ] && found_key=true || found_key=false
+yubicokeys=$(lsusb | grep 'Yubico' | \
+                     awk -F':' '{print $1}' | \
+                     sed -r 's#Bus ([0-9]+) Device ([0-9]+)#\1:\2#g')
+key_is_authorized=false
+found_key=false
 
-key_is_authorized=$(grep  \
-                      "$ID_SERIAL_SHORT" \
-                      /home/$USERNAME/.yubico/authorized_yubikeys >/dev/null \
-                    && true || false)
-
-if $key_is_authorized; then
-  logger "[yubikey] yubiKey: ID_SERIAL_SHORT: $ID_SERIAL_SHORT - key authorized"
-  if ! $found_key; then
-    logger "[yubikey] yubiKey removed or changed"
-
-    if ! $screen_locked; then
-      logger "[yubikey] locking screen"
-
-      # Running the screensaver lock command
-      /bin/su $USERNAME \
-        -c "/usr/bin/gnome-screensaver-command --lock"
-
-      touch "/run/user/$uid/yubikey-lock-screen"
-
-    else
-      logger "[yubikey] screen already locked, doing nothing"
+if [ ! -z "$yubicokeys" ]; then
+  for serdev in $yubicokeys; do
+    serialno=$(lsusb -v -s "$serdev" | \
+                  grep iSerial | awk '{ print $NF }' \
+                  || true )
+    key_is_authorized=$(grep  -qE "^$serialno$" \
+                        /home/$USERNAME/.yubico/authorized_yubikeys \
+                        && echo true || echo false)
+    if $key_is_authorized; then
+      break;
     fi
+  done
+
+  if $key_is_authorized; then
+    logger "[yubikey] yubiKey: ID_SERIAL_SHORT: $ID_SERIAL_SHORT - key authorized"
+    found_key=true
+  fi
+else
+  found_key=false
+fi
+
+if ! $found_key; then
+  logger "[yubikey] yubiKey removed or changed"
+
+  if ! $screen_locked; then
+    logger "[yubikey] locking screen"
+
+    # Running the screensaver lock command
+    /bin/su $USERNAME \
+      -c "/usr/bin/gnome-screensaver-command --lock"
+
+    touch "/run/user/$uid/yubikey-lock-screen"
 
   else
-    logger "[yubikey] yubiKey found, unlocking screensaver if found"
+    logger "[yubikey] screen already locked, doing nothing"
+  fi
 
-    # does not work with the new Unity lock screen
-    # Running the screensaver unlock command
-    # /bin/su $USERNAME \
-    #  -c "/usr/bin/gnome-screensaver-command --deactivate"
+else
+  logger "[yubikey] yubiKey found, unlocking screensaver if found"
 
-    if [ -f "/run/user/$uid/yubikey-lock-screen" ]; then
-      logger "[yubikey] screen was locked with yubikey"
+  # does not work with the new Unity lock screen
+  # Running the screensaver unlock command
+  # /bin/su $USERNAME \
+  #  -c "/usr/bin/gnome-screensaver-command --deactivate"
 
-      if $screen_locked; then
-        logger "[yubikey] unlocking screen"
-        loginctl unlock-sessions
-      fi
+  if [ -f "/run/user/$uid/yubikey-lock-screen" ]; then
+    logger "[yubikey] screen was locked with yubikey"
 
-      rm -f "/run/user/$uid/yubikey-lock-screen"
-    else
-      logger "[yubikey] screen was not locked with yubikey"
-
+    if $screen_locked; then
+      logger "[yubikey] unlocking screen"
+      loginctl unlock-sessions
     fi
 
+    rm -f "/run/user/$uid/yubikey-lock-screen"
+  else
+    logger "[yubikey] screen was not locked with yubikey"
+
   fi
+
 fi
