@@ -91,7 +91,8 @@ else
 
     if $screen_locked; then
       logger "[yubikey] unlocking screen"
-      loginctl unlock-sessions
+      /bin/su $USERNAME \
+        -c 'loginctl unlock-session'
     fi
 
     rm -f "/run/user/$uid/yubikey-lock-screen"
