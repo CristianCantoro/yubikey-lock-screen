@@ -13,7 +13,7 @@ LOCK_TIMEOUT='30'
 
 # tested with just 1 user at the moment
 username="$(who -u | awk '{print $1}' | sort | uniq)"
-uid=$(id -u "$USERNAME")
+uid=$(id -u "$username")
 
 # get D-bus session
 source "/run/user/$uid/dbus-session"
@@ -24,7 +24,7 @@ export DISPLAY=':0'
 find "/run/user/$uid/yubikey-lock-screen"
   -type f -empty -cmin +"$LOCK_TIMEOUT" -exec rm "{}" \; || true
 
-screen_locked=$(/bin/su $USERNAME -c \
+screen_locked=$(/bin/su $username -c \
                   'dbus-send --print-reply \
                              --dest=com.canonical.Unity \
                              /com/canonical/Unity/Session \
@@ -44,7 +44,7 @@ if [ ! -z "$yubicokeys" ]; then
                   grep iSerial | awk '{ print $NF }' \
                   || true )
     key_is_authorized=$(grep  -qE "^$serialno$" \
-                        /home/$USERNAME/.yubico/authorized_yubikeys \
+                        /home/$username/.yubico/authorized_yubikeys \
                         && echo true || echo false)
     if $key_is_authorized; then
       break;
@@ -66,7 +66,7 @@ if ! $found_key; then
     logger "[yubikey] locking screen"
 
     # Running the screensaver lock command
-    /bin/su $USERNAME \
+    /bin/su $username \
       -c "/usr/bin/gnome-screensaver-command --lock"
 
     touch "/run/user/$uid/yubikey-lock-screen"
@@ -80,7 +80,7 @@ else
 
   # does not work with Unity's lock screen
   # Running the screensaver unlock command
-  # /bin/su $USERNAME \
+  # /bin/su $username \
   #  -c "/usr/bin/gnome-screensaver-command --deactivate"
 
   if [ -f "/run/user/$uid/yubikey-lock-screen" ]; then
