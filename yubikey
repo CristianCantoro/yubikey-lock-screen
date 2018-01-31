@@ -21,8 +21,9 @@ export DBUS_SESSION_BUS_ADDRESS
 export DISPLAY=':0'
 
 # delete the lock if older than 30 minutes
-find "/run/user/$uid/yubikey-lock-screen"
-  -type f -empty -cmin +"$LOCK_TIMEOUT" -exec rm "{}" \; || true
+[ -f "/run/user/$uid/yubikey-lock-screen" ] && \
+  find "/run/user/$uid/yubikey-lock-screen" \
+    -type f -empty -cmin "+$LOCK_TIMEOUT" -exec rm "{}" \; || true
 
 screen_locked=$(/bin/su $username -c \
                   'dbus-send --print-reply \
