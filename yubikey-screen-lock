@@ -1,11 +1,29 @@
 #!/usr/bin/env bash
-
 SOURCED=false && [ "$0" = "$BASH_SOURCE" ] || SOURCED=true
 
 if ! $SOURCED; then
   set -euo pipefail
   IFS=$'\n\t'
 fi
+
+# Simple config file that supports comments
+# See:
+#   * Bash parsing variables from config file
+#     https://stackoverflow.com/questions/16571739/
+function parse_config() {
+
+  local configfile="$1"
+
+  while IFS='= ' read lhs rhs; do
+    if [[ ! $lhs =~ ^\ *# && -n $lhs ]]; then
+        rhs="${rhs%%\#*}"     # Del in line right comments
+        rhs="${rhs%%*( )}"    # Del trailing spaces
+        rhs="${rhs%\"*}"      # Del opening string quotes
+        rhs="${rhs#\"*}"      # Del closing string quotes
+        declare $lhs="$rhs"
+    fi
+  done < "$configfile"
+}
 
 # Double checking if the Yubikey is actually removed,
 # Challenge-Response won't trigger the screensaver this way.
@@ -14,6 +32,27 @@ LOCK_TIMEOUT='30'
 # tested with just 1 user at the moment
 username="$(who -u | awk '{print $1}' | sort | uniq)"
 uid=$(id -u "$username")
+
+# if no file authorized_yubikeys is found exit
+if [ ! -f "/home/$username/.yubico/authorized_yubikeys" ]; then
+  (>&2 logger "[yubikey] file /home/$username/.yubico/authorized_yubikeys "
+              "not found")
+  exit 1
+fi
+
+auth_keys_perm="$(stat -c '%a' "/home/$username/.yubico/authorized_yubikeys")"
+if [ "$auth_keys_perm" == '600' ]; then
+  (>&2 logger "[yubikey] file /home/$username/.yubico/authorized_yubikeys "
+              "must have permission 600")
+  exit 1
+fi
+
+# if no file authorized_yubikeys is found exit
+configfile=("/home/$username/.yubico/yubikey-screensaver/" \
+            "yubikey-screensaver.conf")
+if [ ! -f "$configfile" ]; then
+  parse_config "$configfile"
+fi
 
 # get D-bus session
 source "/run/user/$uid/dbus-session"
@@ -39,15 +78,17 @@ yubicokeys=$(lsusb | grep 'Yubico' | \
 key_is_authorized=false
 found_key=false
 
+# FIXME: differentiate add from change/remove
 if [ ! -z "$yubicokeys" ]; then
   for serdev in $yubicokeys; do
     serialno=$(lsusb -v -s "$serdev" | \
                   grep iSerial | awk '{ print $NF }' \
                   || true )
     key_is_authorized=$(grep  -qE "^$serialno$" \
-                        /home/$username/.yubico/authorized_yubikeys \
+                        "/home/$username/.yubico/authorized_yubikeys" \
                         && echo true || echo false)
     if $key_is_authorized; then
+      # TODO: add key challenge (avoid USB spoofing)
       break;
     fi
   done
@@ -60,17 +101,49 @@ else
   found_key=false
 fi
 
+# if /home/$username/.yubico/.nolock is present, set no_lock
+no_lock=false
+if [ -f "/home/$username/.yubico/.nolock" ]; then
+  no_lock=true
+fi
+
 if ! $found_key; then
   logger "[yubikey] yubiKey removed or changed"
 
   if ! $screen_locked; then
-    logger "[yubikey] locking screen"
+    if $ask_confirmation; then
+      if $no_lock, then
+        dialog_response=$(
+          zenity --question \
+                 --title='Confirm' \
+                 --cancel-label="Don't lock" \
+                 --ok-label='Lock' \
+                 --text='File ~/.yubico/.nolock found, confirm screen lock')
+      else
+        dialog_response=$(
+          zenity --question \
+                 --title='Confirm' \
+                 --cancel-label="Don't lock" \
+                 --ok-label='Lock' \
+                 --text='File ~/.yubico/.nolock found, confirm screen lock')
+      fi
+    fi
 
-    # Running the screensaver lock command
-    /bin/su $username \
-      -c "/usr/bin/gnome-screensaver-command --lock"
+    if [[ "$dialog_response" == 'lock' ]], then
+      no_lock=false
+    else
+      no_lock=true
+    fi
 
-    touch "/run/user/$uid/yubikey-lock-screen"
+    if ! $no_lock; then
+      logger "[yubikey] locking screen"
+
+      # Running the screensaver lock command
+      /bin/su $username \
+        -c "/usr/bin/gnome-screensaver-command --lock"
+
+      touch "/run/user/$uid/yubikey-lock-screen"
+    fi
 
   else
     logger "[yubikey] screen already locked, doing nothing"
@@ -98,5 +171,4 @@ else
     logger "[yubikey] screen was not locked with yubikey"
 
   fi
-
 fi
