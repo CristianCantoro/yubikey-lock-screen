@@ -3,6 +3,8 @@
 SOURCED=false && [ "$0" = "$BASH_SOURCE" ] || SOURCED=true
 
 ask_confirmation=false
+unlock_timeout=0
+action='none'
 
 man=false
 debug=false
@@ -10,16 +12,19 @@ verbose=false
 
 read -rd '' docstring <<EOF
 Usage:
-  yubikey-lock-screen [options] ACTION
+  yubikey-lock-screen [options] <action>
   yubikey-lock-screen ( -h | --help | --man )
   yubikey-lock-screen ( --version )
 
+  Arguments:
+    <action>                Yubikey action (add, remove, change)
+
   Options:
-    -d, --debug                   Enable debug mode (implies --verbose)
-    -v, --verbose                 Generate verbose output.
-    -h, --help                    Show this help message and exits.
-    --man                         Show an extended help message.
-    --version                     Print version and copyright information.
+    -d, --debug             Enable debug mode (implies --verbose)
+    -v, --verbose           Generate verbose output.
+    -h, --help              Show this help message and exits.
+    --man                   Show an extended help message.
+    --version               Print version and copyright information.
 ----
 yubikey-lock-screen 0.1.0
 copyright (c) 2018 Cristian Consonni
@@ -30,12 +35,12 @@ EOF
 
 eval "$(echo "$docstring" | docopts -V - -h - : "$@" )"
 
-# bash strict mode
-# See:
-# http://redsymbol.net/articles/unofficial-bash-strict-mode/
-set -euo pipefail
-IFS=$'\n\t'
-
+#################### bash strict mode
+if ! $SOURCED; then
+  set -euo pipefail
+  IFS=$'\n\t'
+fi
+##############################################################################
 
 #################### Utils
 # --debug implies --verbose
@@ -70,8 +75,8 @@ bold()          { ansi 1 "$@"; }
 italic()        { ansi 3 "$@"; }
 underline()     { ansi 4 "$@"; }
 strikethrough() { ansi 9 "$@"; }
-ansi()          { echo -e "\e[${1}m${*:2}\e[0m"; }
-####################
+ansi()          { echo -e "\\e[${1}m${*:2}\\e[0m"; }
+##############################################################################
 
 
 #################### Documentation helpers
@@ -94,19 +99,10 @@ Idea and basic setup taken from:
 
 MANPAGE
 )"
-
 }
+##############################################################################
 
-if $man; then
-  print_man
-  exit 0
-fi
-
-if ! $SOURCED; then
-  set -euo pipefail
-  IFS=$'\n\t'
-fi
-
+#################### functions
 # Simple config file that supports comments
 # See:
 #   * Bash parsing variables from config file
@@ -127,17 +123,25 @@ function parse_config() {
 
     fi
   done < "$configfile"
-
-
 }
+##############################################################################
 
-# Double checking if the Yubikey is actually removed,
-# Challenge-Response won't trigger the screensaver this way.
-LOCK_TIMEOUT='30'
+#################### man
+# if --man is used, print the man page
+if $man; then
+  print_man
+  exit 0
+fi
+##############################################################################
 
+#################### params
 # tested with just 1 user at the moment
 username="$(who -u | awk '{print $1}' | sort | uniq)"
 uid=$(id -u "$username")
+
+echodebug "action: $action"
+echodebug "username (uid): $username ($uid)"
+##############################################################################
 
 # if no file authorized_yubikeys is found exit
 if [ ! -f "/home/$username/.yubico/authorized_yubikeys" ]; then
@@ -185,7 +189,7 @@ if [ -f "/run/user/$uid/yubikey-lock-screen" ]; then
   logger "$msg"
 
   find "/run/user/$uid/yubikey-lock-screen" \
-    -type f -empty -cmin "+$LOCK_TIMEOUT" -exec rm "{}" \; || true
+    -type f -empty -cmin "+$unlock_timeout" -exec rm "{}" \; || true
 fi
 
 if [[ "$USER" == "$username" ]]; then
@@ -214,7 +218,6 @@ key_is_authorized=false
 found_key=false
 
 # FIXME: differentiate add from change/remove
-echodebug "ACTION: $ACTION"
 if [ ! -z "$yubicokeys" ]; then
   for serdev in $yubicokeys; do
     serialno=$(lsusb -v -s "$serdev" | \
@@ -296,29 +299,48 @@ if ! $found_key; then
     fi
 
   else
-    logger "[yubikey] screen already locked, doing nothing"
+    msg='[yubikey] screen already locked, doing nothing'
+    echoinfo "$msg"
+    logger "$msg"
   fi
 
 else
-  logger "[yubikey] yubiKey found, unlocking screensaver if found"
+  msg='[yubikey] yubikey found, unlocking screensaver if found'
+  echoinfo "$msg"
+  logger "$msg"
 
   # does not work with Unity's lock screen
   # Running the screensaver unlock command
   # /bin/su $username \
   #  -c "/usr/bin/gnome-screensaver-command --deactivate"
 
-  if [ -f "/run/user/$uid/yubikey-lock-screen" ]; then
-    logger "[yubikey] screen was locked with yubikey"
+  if $screen_locked; then
+    if [ -f "/run/user/$uid/yubikey-lock-screen" ]; then
+      msg='[yubikey] screen was locked with yubikey'
+      echoinfo "$msg"
+      logger "$msg"
 
-    if $screen_locked; then
-      # unlocks all sessions, ok if there is only one user
-      logger "[yubikey] unlocking screen"
-      loginctl unlock-sessions
+      if $screen_locked; then
+        # unlocks all sessions, ok if there is only one user
+        msg='[yubikey] unlocking screen'
+        echoinfo "$msg"
+        logger "$msg"
+
+        loginctl unlock-sessions
+      fi
+
+      msg='[yubikey] remove lock file'
+      echoinfo "$msg"
+      logger "$msg"
+      rm -f "/run/user/$uid/yubikey-lock-screen"
+    else
+      msg='[yubikey] screen was not locked with yubikey'
+      echoinfo "$msg"
+      logger "$msg"
     fi
-
-    rm -f "/run/user/$uid/yubikey-lock-screen"
   else
-    logger "[yubikey] screen was not locked with yubikey"
-
+    msg='[yubikey] screen not locked, doing nothing'
+    echoinfo "$msg"
+    logger "$msg"
   fi
 fi
