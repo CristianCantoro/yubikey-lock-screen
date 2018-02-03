@@ -1,5 +1,106 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2128
 SOURCED=false && [ "$0" = "$BASH_SOURCE" ] || SOURCED=true
+
+ask_confirmation=false
+
+man=false
+debug=false
+verbose=false
+
+read -rd '' docstring <<EOF
+Usage:
+  yubikey-lock-screen [options] ACTION
+  yubikey-lock-screen ( -h | --help | --man )
+  yubikey-lock-screen ( --version )
+
+  Options:
+    -d, --debug                   Enable debug mode (implies --verbose)
+    -v, --verbose                 Generate verbose output.
+    -h, --help                    Show this help message and exits.
+    --man                         Show an extended help message.
+    --version                     Print version and copyright information.
+----
+yubikey-lock-screen 0.1.0
+copyright (c) 2018 Cristian Consonni
+MIT License
+This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.
+EOF
+
+eval "$(echo "$docstring" | docopts -V - -h - : "$@" )"
+
+# bash strict mode
+# See:
+# http://redsymbol.net/articles/unofficial-bash-strict-mode/
+set -euo pipefail
+IFS=$'\n\t'
+
+
+#################### Utils
+# --debug implies --verbose
+if $debug; then
+  verbose=true
+fi
+
+if $debug; then
+  echodebug() {
+    echo -en "[$(date '+%F_%k:%M:%S')][debug]\\t"
+    echo "$@"
+  }
+else
+  echodebug() { true; }
+fi
+
+if $verbose; then
+  echoinfo() {
+    echo -en "[$(date '+%F_%k:%M:%S')][info] \\t"
+    echo "$@"
+  }
+else
+  echoinfo() { true; }
+fi
+
+echoerror() {
+  (>&2 echo -en "[$(date '+%F_%k:%M:%S')][error]\\t" )
+  (>&2 echo "$@" )
+}
+
+bold()          { ansi 1 "$@"; }
+italic()        { ansi 3 "$@"; }
+underline()     { ansi 4 "$@"; }
+strikethrough() { ansi 9 "$@"; }
+ansi()          { echo -e "\e[${1}m${*:2}\e[0m"; }
+####################
+
+
+#################### Documentation helpers
+function print_help() {
+  eval "$(echo "$docstring" | docopts -V - -h - : '-h' | head -n -1)"
+}
+
+function print_man() {
+
+  print_help
+
+  echo -e "$(cat <<MANPAGE
+
+$(bold REFERENCES)
+
+Idea and basic setup taken from:
+ * [[HOW TO] - [Linux / Debian] Login, lock/unlock screensaver][1]
+
+[1]: https://forum.yubico.com/viewtopic.php?f=23&t=1143
+
+MANPAGE
+)"
+
+}
+
+if $man; then
+  print_man
+  exit 0
+fi
 
 if ! $SOURCED; then
   set -euo pipefail
@@ -14,15 +115,20 @@ function parse_config() {
 
   local configfile="$1"
 
-  while IFS='= ' read lhs rhs; do
+  while IFS='= ' read -r lhs rhs; do
     if [[ ! $lhs =~ ^\ *# && -n $lhs ]]; then
         rhs="${rhs%%\#*}"     # Del in line right comments
         rhs="${rhs%%*( )}"    # Del trailing spaces
         rhs="${rhs%\"*}"      # Del opening string quotes
         rhs="${rhs#\"*}"      # Del closing string quotes
-        declare $lhs="$rhs"
+
+        echodebug "(parse_config) declare -g $lhs=$rhs"
+        declare -g "$lhs"="$rhs"
+
     fi
   done < "$configfile"
+
+
 }
 
 # Double checking if the Yubikey is actually removed,
@@ -35,42 +141,71 @@ uid=$(id -u "$username")
 
 # if no file authorized_yubikeys is found exit
 if [ ! -f "/home/$username/.yubico/authorized_yubikeys" ]; then
-  (>&2 logger "[yubikey] file /home/$username/.yubico/authorized_yubikeys "
-              "not found")
+  errormsg="[yubikey] file /home/$username/.yubico/authorized_yubikeys "
+  errormsg+="not found"
+
+  echoerror "$errormsg"
+  logger "$errormsg"
   exit 1
 fi
 
 auth_keys_perm="$(stat -c '%a' "/home/$username/.yubico/authorized_yubikeys")"
-if [ "$auth_keys_perm" == '600' ]; then
-  (>&2 logger "[yubikey] file /home/$username/.yubico/authorized_yubikeys "
-              "must have permission 600")
+if ! [ "$auth_keys_perm" == '600' ]; then
+  errormsg="[yubikey] file /home/$username/.yubico/authorized_yubikeys "
+  errormsg+="must have permission 600"
+
+  echoerror "$errormsg"
+  logger "$errormsg"
   exit 1
 fi
 
 # if no file authorized_yubikeys is found exit
-configfile=("/home/$username/.yubico/yubikey-screensaver/" \
-            "yubikey-screensaver.conf")
-if [ ! -f "$configfile" ]; then
+configfile="/home/$username/.yubico/yubikey-screensaver/"
+configfile+='yubikey-screensaver.conf'
+echodebug "configfile: $configfile"
+if [ -f "$configfile" ]; then
   parse_config "$configfile"
 fi
 
+echodebug "ask_confirmation: $ask_confirmation"
+
 # get D-bus session
+# shellcheck disable=SC1090
 source "/run/user/$uid/dbus-session"
 export DBUS_SESSION_BUS_ADDRESS
 export DISPLAY=':0'
 
+echodebug "DBUS_SESSION_BUS_ADDRESS: $DBUS_SESSION_BUS_ADDRESS"
+echodebug "DISPLAY: $DISPLAY"
+
 # delete the lock if older than 30 minutes
-[ -f "/run/user/$uid/yubikey-lock-screen" ] && \
+if [ -f "/run/user/$uid/yubikey-lock-screen" ]; then
+  msg='[yubikey] remove lock file, older than 30 minutes'
+  echoinfo "$msg"
+  logger "$msg"
+
   find "/run/user/$uid/yubikey-lock-screen" \
     -type f -empty -cmin "+$LOCK_TIMEOUT" -exec rm "{}" \; || true
+fi
 
-screen_locked=$(/bin/su $username -c \
-                  'dbus-send --print-reply \
-                             --dest=com.canonical.Unity \
-                             /com/canonical/Unity/Session \
-                             com.canonical.Unity.Session.IsLocked | \
-                      grep -q "true" && echo true || echo false' )
-logger "[yubikey] screen_locked: $screen_locked"
+if [[ "$USER" == "$username" ]]; then
+screen_locked=$(dbus-send --print-reply \
+                          --dest=com.canonical.Unity \
+                            /com/canonical/Unity/Session \
+                            com.canonical.Unity.Session.IsLocked | \
+                    grep -q "true" && echo true || echo false )
+else
+  # shellcheck disable=SC1004
+  screen_locked=$(/bin/su "$username" -c \
+                      'dbus-send --print-reply \
+                                 --dest=com.canonical.Unity \
+                                   /com/canonical/Unity/Session \
+                                   com.canonical.Unity.Session.IsLocked | \
+                    grep -q "true" && echo true || echo false' )
+fi
+msg="[yubikey] screen_locked: $screen_locked"
+echoinfo "$msg"
+logger "$msg"
 
 yubicokeys=$(lsusb | grep 'Yubico' | \
                      awk -F':' '{print $1}' | \
@@ -79,6 +214,7 @@ key_is_authorized=false
 found_key=false
 
 # FIXME: differentiate add from change/remove
+echodebug "ACTION: $ACTION"
 if [ ! -z "$yubicokeys" ]; then
   for serdev in $yubicokeys; do
     serialno=$(lsusb -v -s "$serdev" | \
@@ -94,7 +230,9 @@ if [ ! -z "$yubicokeys" ]; then
   done
 
   if $key_is_authorized; then
-    logger "[yubikey] yubiKey: ID_SERIAL_SHORT: $serialno - key authorized"
+    msg="[yubikey] yubiKey: ID_SERIAL_SHORT: $serialno - key authorized"
+    echoinfo "$msg"
+    logger "$msg"
     found_key=true
   fi
 else
@@ -103,16 +241,22 @@ fi
 
 # if /home/$username/.yubico/.nolock is present, set no_lock
 no_lock=false
-if [ -f "/home/$username/.yubico/.nolock" ]; then
+if [ -f "/home/$username/.yubico/yubikey-screensaver/.nolock" ]; then
   no_lock=true
+
+  msg='[yubikey] no_lock set'
+  echoinfo "$msg"
+  logger "$msg"
 fi
 
 if ! $found_key; then
-  logger "[yubikey] yubiKey removed or changed"
+  msg='[yubikey] yubiKey removed or changed'
+  echoinfo "$msg"
+  logger "$msg"
 
   if ! $screen_locked; then
     if $ask_confirmation; then
-      if $no_lock, then
+      if $no_lock; then
         dialog_response=$(
           zenity --question \
                  --title='Confirm' \
@@ -129,18 +273,24 @@ if ! $found_key; then
       fi
     fi
 
-    if [[ "$dialog_response" == 'lock' ]], then
+    if [[ "$dialog_response" == 'lock' ]]; then
       no_lock=false
     else
       no_lock=true
     fi
 
     if ! $no_lock; then
-      logger "[yubikey] locking screen"
+      msg='[yubikey] locking screen'
+      echoinfo "$msg"
+      logger "$msg"
 
       # Running the screensaver lock command
-      /bin/su $username \
-        -c "/usr/bin/gnome-screensaver-command --lock"
+      if [[ "$USER" == "$username" ]]; then
+        /usr/bin/gnome-screensaver-command --lock
+      else
+        /bin/su "$username" \
+          -c '/usr/bin/gnome-screensaver-command --lock'
+      fi
 
       touch "/run/user/$uid/yubikey-lock-screen"
     fi
