@@ -317,11 +317,11 @@ if [ -f "/run/user/$uid/yubikey-lock-screen" ]; then
     -type f -empty -cmin "+$unlock_timeout" -exec rm "{}" \; || true
 fi
 
-if [[ "$USER" == "$username" ]]; then
-screen_locked=$(dbus-send --print-reply \
-                          --dest=com.canonical.Unity \
-                            /com/canonical/Unity/Session \
-                            com.canonical.Unity.Session.IsLocked | \
+if [ -n "${USER-}" ] && [[ "$USER" == "$username" ]]; then
+  screen_locked=$(dbus-send --print-reply \
+                            --dest=com.canonical.Unity \
+                              /com/canonical/Unity/Session \
+                              com.canonical.Unity.Session.IsLocked | \
                     grep -q "true" && echo true || echo false )
 else
   # shellcheck disable=SC1004
@@ -433,7 +433,7 @@ if [[ ($action == 'remove' || $action == 'change') ]] && (! $found_key); then
       logger "$msg"
 
       # Running the screensaver lock command
-      if [[ "$USER" == "$username" ]]; then
+      if [ -n "${USER-}" ] && [[ "$USER" == "$username" ]]; then
         /usr/bin/gnome-screensaver-command --lock
       else
         /bin/su "$username" \
