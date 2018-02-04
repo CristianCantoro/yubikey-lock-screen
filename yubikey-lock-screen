@@ -3,8 +3,11 @@
 SOURCED=false && [ "$0" = "$BASH_SOURCE" ] || SOURCED=true
 
 ask_confirmation=false
-unlock_timeout=0
+unlock_timeout=30
+multikey=false
+
 action='none'
+device_serial=0
 
 man=false
 debug=false
@@ -12,19 +15,23 @@ verbose=false
 
 read -rd '' docstring <<EOF
 Usage:
-  yubikey-lock-screen [options] <action>
+  yubikey-lock-screen [options] <action> <device_serial>
   yubikey-lock-screen ( -h | --help | --man )
   yubikey-lock-screen ( --version )
 
   Arguments:
-    <action>                Yubikey action (add, remove, change)
+    <action>                Yubikey action (one of: add, remove, change).
+    <device_serial>         Yubikey short serial number.
 
   Options:
-    -d, --debug             Enable debug mode (implies --verbose)
-    -v, --verbose           Generate verbose output.
-    -h, --help              Show this help message and exits.
-    --man                   Show an extended help message.
-    --version               Print version and copyright information.
+    -a, --ask-confirmation                  Ask
+    -u, --unlock-timeout  <Unlock_timeout>  Timeout
+    -m, --multikey                          Multikey
+    -d, --debug                             Enable debug mode (implies --verbose)
+    -v, --verbose                           Generate verbose output.
+    -h, --help                              Show this help message and exits.
+    --man                                   Show an extended help message.
+    --version                               Print version and copyright information.
 ----
 yubikey-lock-screen 0.1.0
 copyright (c) 2018 Cristian Consonni
@@ -50,7 +57,7 @@ fi
 
 if $debug; then
   echodebug() {
-    echo -en "[$(date '+%F_%k:%M:%S')][debug]\\t"
+    echo -en "[$(date '+%F %H:%M:%S')][debug]  \\t($BASH_LINENO): "
     echo "$@"
   }
 else
@@ -59,7 +66,7 @@ fi
 
 if $verbose; then
   echoinfo() {
-    echo -en "[$(date '+%F_%k:%M:%S')][info] \\t"
+    echo -en "[$(date '+%F %H:%M:%S')][info]   \\t"
     echo "$@"
   }
 else
@@ -67,7 +74,12 @@ else
 fi
 
 echoerror() {
-  (>&2 echo -en "[$(date '+%F_%k:%M:%S')][error]\\t" )
+  (>&2 echo -en "[$(date '+%F %H:%M:%S')][error]  \\t" )
+  (>&2 echo "$@" )
+}
+
+echowarning() {
+  (>&2 echo -en "[$(date '+%F %H:%M:%S')][warning]\\t" )
   (>&2 echo "$@" )
 }
 
@@ -124,6 +136,27 @@ function parse_config() {
     fi
   done < "$configfile"
 }
+
+function user_key_is_authorized() {
+
+  local username="$1"
+  local serialno="$2"
+  local auth_file
+  auth_file="/home/$username/.yubico/yubikey-screensaver/authorized_yubikeys"
+
+  echodebug "(user_key_is_authorized) username: $username"
+  echodebug "(user_key_is_authorized) serialno: $serialno"
+  echodebug "(user_key_is_authorized) auth_file: $auth_file"
+
+  if grep -qE "^$serialno$" "$auth_file";
+  then
+    echodebug '(user_key_is_authorized) return 0'
+    return 0
+  else
+    echodebug '(user_key_is_authorized) return 1'
+    return 1
+  fi
+}
 ##############################################################################
 
 #################### man
@@ -143,20 +176,20 @@ echodebug "action: $action"
 echodebug "username (uid): $username ($uid)"
 ##############################################################################
 
+authorized_yubikeys_file="/home/$username/"
+authorized_yubikeys_file+=".yubico/yubikey-screensaver/authorized_yubikeys"
 # if no file authorized_yubikeys is found exit
-if [ ! -f "/home/$username/.yubico/authorized_yubikeys" ]; then
-  errormsg="[yubikey] file /home/$username/.yubico/authorized_yubikeys "
-  errormsg+="not found"
+if [ ! -f "$authorized_yubikeys_file" ]; then
+  errormsg="[yubikey] file $authorized_yubikeys_file not found"
 
   echoerror "$errormsg"
   logger "$errormsg"
   exit 1
 fi
 
-auth_keys_perm="$(stat -c '%a' "/home/$username/.yubico/authorized_yubikeys")"
+auth_keys_perm="$(stat -c '%a' "$authorized_yubikeys_file" )"
 if ! [ "$auth_keys_perm" == '600' ]; then
-  errormsg="[yubikey] file /home/$username/.yubico/authorized_yubikeys "
-  errormsg+="must have permission 600"
+  errormsg="[yubikey] file $authorized_yubikeys_file must have permission 600"
 
   echoerror "$errormsg"
   logger "$errormsg"
@@ -214,32 +247,44 @@ logger "$msg"
 yubicokeys=$(lsusb | grep 'Yubico' | \
                      awk -F':' '{print $1}' | \
                      sed -r 's#Bus ([0-9]+) Device ([0-9]+)#\1:\2#g' || true )
-key_is_authorized=false
+key_preauthorized=false
 found_key=false
 
-# FIXME: differentiate add from change/remove
 if [ ! -z "$yubicokeys" ]; then
   for serdev in $yubicokeys; do
     serialno=$(lsusb -v -s "$serdev" | \
-                  grep iSerial | awk '{ print $NF }' \
-                  || true )
-    key_is_authorized=$(grep  -qE "^$serialno$" \
-                        "/home/$username/.yubico/authorized_yubikeys" \
-                        && echo true || echo false)
-    if $key_is_authorized; then
-      # TODO: add key challenge (avoid USB spoofing)
+                    grep iSerial | awk '{ print $NF }' \
+                    || true )
+
+    if ! $multikey; then
+      if [[ "$device_serial" != "$serialno" ]]; then
+        continue
+      fi
+    fi
+
+    user_key_is_authorized "$username" "$serialno" && \
+      key_preauthorized=true || key_preauthorized=false
+
+    if $key_preauthorized; then
       break;
     fi
   done
+fi
+echodebug "key_preauthorized: $key_preauthorized"
 
-  if $key_is_authorized; then
-    msg="[yubikey] yubiKey: ID_SERIAL_SHORT: $serialno - key authorized"
-    echoinfo "$msg"
-    logger "$msg"
-    found_key=true
-  fi
+if $key_preauthorized; then
+  msg="[yubikey] yubiKey: ID_SERIAL_SHORT: $device_serial - key preauthorized"
+  echoinfo "$msg"
+  logger "$msg"
+
+  # TODO: add key challenge (avoid USB spoofing)
+
+  found_key=true
+  echodebug "found_key: $found_key"
 else
   found_key=false
+  echodebug "found_key: $found_key"
+  exit 0
 fi
 
 # if /home/$username/.yubico/.nolock is present, set no_lock
@@ -252,34 +297,54 @@ if [ -f "/home/$username/.yubico/yubikey-screensaver/.nolock" ]; then
   logger "$msg"
 fi
 
-if ! $found_key; then
-  msg='[yubikey] yubiKey removed or changed'
+if [[ ($action == 'remove' || $action == 'change') ]] && (! $found_key); then
+  msg='[yubikey] yubikey removed or changed'
   echoinfo "$msg"
   logger "$msg"
 
   if ! $screen_locked; then
     if $ask_confirmation; then
-      if $no_lock; then
-        dialog_response=$(
-          zenity --question \
-                 --title='Confirm' \
-                 --cancel-label="Don't lock" \
-                 --ok-label='Lock' \
-                 --text='File ~/.yubico/.nolock found, confirm screen lock')
-      else
-        dialog_response=$(
-          zenity --question \
-                 --title='Confirm' \
-                 --cancel-label="Don't lock" \
-                 --ok-label='Lock' \
-                 --text='File ~/.yubico/.nolock found, confirm screen lock')
-      fi
-    fi
+      dialog_response=''
 
-    if [[ "$dialog_response" == 'lock' ]]; then
-      no_lock=false
-    else
-      no_lock=true
+      if $no_lock; then
+        if zenity \
+            --icon-name='dialog-warning' \
+            --question \
+            --title='Confirm' \
+            --cancel-label="Don't lock" \
+            --ok-label='Lock' \
+            --text='.nolock file found, please confirm screen lock' \
+              2>/dev/null;
+        then
+          dialog_response='lock'
+        else
+          dialog_response='nolock'
+        fi
+
+      else
+        if zenity \
+            --question \
+            --title='Confirm' \
+            --cancel-label="Don't lock" \
+            --ok-label='Lock' \
+            --text='Please confirm screen lock'\
+              2>/dev/null;
+        then
+          dialog_response='lock'
+        else
+          dialog_response='nolock'
+        fi
+      fi
+
+      echodebug "dialog_response: $dialog_response"
+
+      if [[ "$dialog_response" == 'lock' ]]; then
+        no_lock=false
+      else
+        no_lock=true
+      fi
+
+      echodebug "updated no_lock: $no_lock"
     fi
 
     if ! $no_lock; then
@@ -296,6 +361,10 @@ if ! $found_key; then
       fi
 
       touch "/run/user/$uid/yubikey-lock-screen"
+    else
+      msg='[yubikey] no_lock set, not locking screen'
+      echoinfo "$msg"
+      logger "$msg"
     fi
 
   else
@@ -304,7 +373,7 @@ if ! $found_key; then
     logger "$msg"
   fi
 
-else
+elif [[ $action == 'add' ]] && $found_key; then
   msg='[yubikey] yubikey found, unlocking screensaver if found'
   echoinfo "$msg"
   logger "$msg"
@@ -343,4 +412,15 @@ else
     echoinfo "$msg"
     logger "$msg"
   fi
+else
+
+  if $found_key; then
+    errormsg="[yubikey] key found with unexpected action '$action'. "
+  else
+    errormsg="[yubikey] key not found with action '$action'. "
+  fi
+  errormsg+="This is unexpected."
+
+  echowarning "$errormsg"
+  logger "$errormsg"
 fi
