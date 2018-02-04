@@ -164,7 +164,7 @@ function preauth() {
   local username="$1"
   local serialno="$2"
   local auth_file
-  auth_file="/home/$username/.yubico/yubikey-screensaver/authorized_yubikeys"
+  auth_file="/home/$username/.yubico/authorized_yubikeys"
 
   echodebug "(preauth) username: $username"
   echodebug "(preauth) serialno: $serialno"
@@ -186,7 +186,7 @@ function chalresp() {
   local yubikey_response
   local expected_response
   local auth_file
-  auth_file="/home/$username/.yubico/yubikey-screensaver/authorized_yubikeys"
+  auth_file="/home/$username/.yubico/authorized_yubikeys"
 
   msg="[yubikey] yubiKey: ID_SERIAL_SHORT: $serialno - key preauthorized"
   echoinfo "$msg"
@@ -223,8 +223,7 @@ echodebug "action: $action"
 echodebug "username (uid): $username ($uid)"
 ##############################################################################
 
-authorized_yubikeys_file="/home/$username/"
-authorized_yubikeys_file+=".yubico/yubikey-screensaver/authorized_yubikeys"
+authorized_yubikeys_file="/home/$username/.yubico/authorized_yubikeys"
 # if no file authorized_yubikeys is found exit
 if [ ! -f "$authorized_yubikeys_file" ]; then
   errormsg="[yubikey] file $authorized_yubikeys_file not found"
