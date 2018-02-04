@@ -362,11 +362,17 @@ if [ ! -z "$yubicokeys" ]; then
       echodebug "key_preauthorized: $key_preauthorized"
 
       if chalresp "$username" "$serialno"; then
-        echodebug "challenge-response succeded"
+        msg='[yubikey] challenge-response succeded'
+        echoinfo "$msg"
+        logger "$msg"
+
         found_key=true
         break;
       else
-        echodebug "challenge-response failed"
+        msg='challenge-response failed'
+        echoinfo "$msg"
+        logger "$msg"
+
         found_key=false
       fi
     fi
