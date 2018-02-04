@@ -2,7 +2,17 @@
 # shellcheck disable=SC2128
 SOURCED=false && [ "$0" = "$BASH_SOURCE" ] || SOURCED=true
 
+config_ask_confirmation=false
+config_warn_nolock=false
+config_unlock_timeout=30
+config_multikey=false
+
+no_ask_confirmation=false
+no_warn_nolock=false
+no_multikey=false
+
 ask_confirmation=false
+warn_nolock=false
 unlock_timeout=30
 multikey=false
 
@@ -15,7 +25,12 @@ verbose=false
 
 read -rd '' docstring <<EOF
 Usage:
-  yubikey-lock-screen [options] <action> <device_serial>
+  yubikey-lock-screen [options]
+                      [ (--ask-confirmation|--no-ask-confirmation) ]
+                      [ (--warn-nolock|--no-warn-nolock) ]
+                      [ (--multikey|--no-multikey) ]
+                      [ --unlock-timeout <mins> ]
+                      <action> <device_serial>
   yubikey-lock-screen ( -h | --help | --man )
   yubikey-lock-screen ( --version )
 
@@ -24,14 +39,21 @@ Usage:
     <device_serial>         Yubikey short serial number.
 
   Options:
-    -a, --ask-confirmation                  Ask
-    -u, --unlock-timeout  <Unlock_timeout>  Timeout
-    -m, --multikey                          Multikey
-    -d, --debug                             Enable debug mode (implies --verbose)
-    -v, --verbose                           Generate verbose output.
-    -h, --help                              Show this help message and exits.
-    --man                                   Show an extended help message.
-    --version                               Print version and copyright information.
+    -a, --ask-confirmation        Ask confirmation before locking.
+    --no-ask-confimation          Don't ask for confirmation before locking.
+    -w, --warn-nolock             Show a warning popup when a .nolock file is
+                                  present.
+    --no-warn-nolock              Don't show a warning popup when a .nolock
+                                  file is present.
+    -m, --multikey                Enable multikey support.
+    --no-multikey                 Disable multikey support.
+    -u, --unlock-timeout <mins>   Timeout in minutes after which the possibility
+                                  to unlock the screen with the Yubikey expires.
+    -d, --debug                   Enable debug mode (implies --verbose).
+    -v, --verbose                 Generate verbose output.
+    -h, --help                    Show this help message and exits.
+    --man                         Show an extended help message.
+    --version                     Print version and copyright information.
 ----
 yubikey-lock-screen 0.1.0
 copyright (c) 2018 Cristian Consonni
@@ -130,32 +152,57 @@ function parse_config() {
         rhs="${rhs%\"*}"      # Del opening string quotes
         rhs="${rhs#\"*}"      # Del closing string quotes
 
-        echodebug "(parse_config) declare -g $lhs=$rhs"
-        declare -g "$lhs"="$rhs"
+        echodebug "(parse_config) declare -g config_$lhs=$rhs"
+        declare -g config_"$lhs"="$rhs"
 
     fi
   done < "$configfile"
 }
 
-function user_key_is_authorized() {
+function preauth() {
 
   local username="$1"
   local serialno="$2"
   local auth_file
   auth_file="/home/$username/.yubico/yubikey-screensaver/authorized_yubikeys"
 
-  echodebug "(user_key_is_authorized) username: $username"
-  echodebug "(user_key_is_authorized) serialno: $serialno"
-  echodebug "(user_key_is_authorized) auth_file: $auth_file"
+  echodebug "(preauth) username: $username"
+  echodebug "(preauth) serialno: $serialno"
+  echodebug "(preauth) auth_file: $auth_file"
 
-  if grep -qE "^$serialno$" "$auth_file";
-  then
-    echodebug '(user_key_is_authorized) return 0'
+  if awk -F':' '{print $1}' "${auth_file}" | grep -qE "^${serialno}$"; then
+    echodebug '(preauth) return 0'
     return 0
   else
-    echodebug '(user_key_is_authorized) return 1'
+    echodebug '(preauth) return 1'
     return 1
   fi
+}
+
+function chalresp() {
+
+  local username="$1"
+  local serialno="$2"
+  local yubikey_response
+  local expected_response
+  local auth_file
+  auth_file="/home/$username/.yubico/yubikey-screensaver/authorized_yubikeys"
+
+  msg="[yubikey] yubiKey: ID_SERIAL_SHORT: $serialno - key preauthorized"
+  echoinfo "$msg"
+  logger "$msg"
+
+  yubikey_response="$(ykchalresp -2 -x "$serialno")"
+  expected_response="$(grep -E "^${serialno}:" "${auth_file}" | \
+                       awk -F':' '{print $2}')"
+  if [[ "$yubikey_response" == "$expected_response" ]]; then
+    echodebug '(chalresp) return 0'
+    return 0
+  else
+    echodebug '(chalresp) return 1'
+    return 1
+  fi
+
 }
 ##############################################################################
 
@@ -204,7 +251,52 @@ if [ -f "$configfile" ]; then
   parse_config "$configfile"
 fi
 
+echodebug "#################### config"
+echodebug "config_warn_nolock: $config_warn_nolock"
+echodebug "config_unlock_timeout $config_unlock_timeout"
+echodebug "config_multikey: $config_multikey"
+
+echodebug "#################### cli"
 echodebug "ask_confirmation: $ask_confirmation"
+echodebug "warn_nolock: $warn_nolock"
+echodebug "unlock_timeout: $unlock_timeout"
+echodebug "multikey: $multikey"
+echodebug "####################"
+
+if ! $ask_confirmation; then
+  if $no_ask_confirmation; then
+    ask_confirmation=false
+  else
+    ask_confirmation="$config_ask_confirmation"
+  fi
+fi
+
+if ! $warn_nolock; then
+  if $no_warn_nolock; then
+    warn_nolock=false
+  else
+    warn_nolock="$config_warn_nolock"
+  fi
+fi
+
+if [ -z "$unlock_timeout" ]; then
+  unlock_timeout="$config_unlock_timeout"
+fi
+
+if ! $multikey; then
+  if $no_multikey; then
+    multikey=false
+  else
+    multikey="$config_multikey"
+  fi
+fi
+
+echodebug "#################### final"
+echodebug "ask_confirmation: $ask_confirmation"
+echodebug "warn_nolock: $warn_nolock"
+echodebug "unlock_timeout: $unlock_timeout"
+echodebug "multikey: $multikey"
+echodebug "####################"
 
 # get D-bus session
 # shellcheck disable=SC1090
@@ -250,6 +342,7 @@ yubicokeys=$(lsusb | grep 'Yubico' | \
 key_preauthorized=false
 found_key=false
 
+serialno=''
 if [ ! -z "$yubicokeys" ]; then
   for serdev in $yubicokeys; do
     serialno=$(lsusb -v -s "$serdev" | \
@@ -262,30 +355,24 @@ if [ ! -z "$yubicokeys" ]; then
       fi
     fi
 
-    user_key_is_authorized "$username" "$serialno" && \
+    preauth "$username" "$serialno" && \
       key_preauthorized=true || key_preauthorized=false
 
     if $key_preauthorized; then
-      break;
+      echodebug "key_preauthorized: $key_preauthorized"
+
+      if chalresp "$username" "$serialno"; then
+        echodebug "challenge-response succeded"
+        found_key=true
+        break;
+      else
+        echodebug "challenge-response failed"
+        found_key=false
+      fi
     fi
   done
 fi
-echodebug "key_preauthorized: $key_preauthorized"
-
-if $key_preauthorized; then
-  msg="[yubikey] yubiKey: ID_SERIAL_SHORT: $device_serial - key preauthorized"
-  echoinfo "$msg"
-  logger "$msg"
-
-  # TODO: add key challenge (avoid USB spoofing)
-
-  found_key=true
-  echodebug "found_key: $found_key"
-else
-  found_key=false
-  echodebug "found_key: $found_key"
-  exit 0
-fi
+echodebug "found_key: $found_key"
 
 # if /home/$username/.yubico/.nolock is present, set no_lock
 no_lock=false
@@ -303,48 +390,41 @@ if [[ ($action == 'remove' || $action == 'change') ]] && (! $found_key); then
   logger "$msg"
 
   if ! $screen_locked; then
-    if $ask_confirmation; then
-      dialog_response=''
-
-      if $no_lock; then
-        if zenity \
-            --icon-name='dialog-warning' \
-            --question \
-            --title='Confirm' \
-            --cancel-label="Don't lock" \
-            --ok-label='Lock' \
-            --text='.nolock file found, please confirm screen lock' \
-              2>/dev/null;
-        then
-          dialog_response='lock'
-        else
-          dialog_response='nolock'
-        fi
-
-      else
+    if $no_lock; then
+      # file .nolock found
+      if $warn_nolock; then
+        zenity \
+          --warning \
+          --title='Warnging' \
+          --text='.nolock file found, not locking screen' \
+            2>/dev/null &
+      fi
+    else
+      # can lock
+      if $ask_confirmation; then
+        dialog_response=''
         if zenity \
             --question \
             --title='Confirm' \
             --cancel-label="Don't lock" \
             --ok-label='Lock' \
             --text='Please confirm screen lock'\
-              2>/dev/null;
-        then
+              2>/dev/null; then
           dialog_response='lock'
         else
           dialog_response='nolock'
         fi
+
+        echodebug "dialog_response: $dialog_response"
+
+        if [[ "$dialog_response" == 'lock' ]]; then
+          no_lock=false
+        else
+          no_lock=true
+        fi
       fi
 
-      echodebug "dialog_response: $dialog_response"
-
-      if [[ "$dialog_response" == 'lock' ]]; then
-        no_lock=false
-      else
-        no_lock=true
-      fi
-
-      echodebug "updated no_lock: $no_lock"
+      echodebug "no_lock: $no_lock"
     fi
 
     if ! $no_lock; then
