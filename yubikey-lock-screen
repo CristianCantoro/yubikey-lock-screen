@@ -170,7 +170,8 @@ function preauth() {
   echodebug "(preauth) serialno: $serialno"
   echodebug "(preauth) auth_file: $auth_file"
 
-  if awk -F':' '{print $1}' "${auth_file}" | grep -qE "^${serialno}$"; then
+  if awk -F':' '{print $1}' "${auth_file}" | \
+      grep -qE "^${serialno}$"; then
     echodebug '(preauth) return 0'
     return 0
   else
@@ -349,11 +350,20 @@ if [ ! -z "$yubicokeys" ]; then
                     || true )
 
     if ! $multikey; then
+      # Pad the serial number with zeros, we need to force base 10, to avoid
+      # the number being interpreted as octal.
+      # https://unix.stackexchange.com/questions/70966/
+      device_serial=$(printf "%010d" "$((10#$serialno))")
+      serialno=$(printf "%010d" "$((10#$serialno))")
+
+      echodebug "padded device_serial: $device_serial"
+      echodebug "padded serialno: $serialno"
       if [[ "$device_serial" != "$serialno" ]]; then
         continue
       fi
     fi
 
+    echodebug 'check preauth'
     preauth "$username" "$serialno" && \
       key_preauthorized=true || key_preauthorized=false
 
