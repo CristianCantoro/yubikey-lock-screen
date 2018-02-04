@@ -399,23 +399,47 @@ if [[ ($action == 'remove' || $action == 'change') ]] && (! $found_key); then
     if $no_lock; then
       # file .nolock found
       if $warn_nolock; then
-        zenity \
-          --warning \
-          --title='Warnging' \
-          --text='.nolock file found, not locking screen' \
-            2>/dev/null &
+        if [ -n "${USER-}" ] && [[ "$USER" == "$username" ]]; then
+          /usr/bin/zenity \
+            --warning \
+            --title='Warning' \
+            --text='.nolock file found, not locking screen' \
+              2>/dev/null &
+        else
+          # shellcheck disable=SC1004
+          /bin/su "$username" \
+            -c '/usr/bin/zenity \
+                 --warning \
+                 --title="Warning" \
+                 --text=".nolock file found, not locking screen" \
+                   2>/dev/null &'
+        fi
       fi
     else
       # can lock
       if $ask_confirmation; then
         dialog_response=''
-        if zenity \
-            --question \
-            --title='Confirm' \
-            --cancel-label="Don't lock" \
-            --ok-label='Lock' \
-            --text='Please confirm screen lock'\
-              2>/dev/null; then
+        if [ -n "${USER-}" ] && [[ "$USER" == "$username" ]]; then
+          /usr/bin/zenity --question \
+                          --title='Confirm' \
+                          --cancel-label="Don't lock" \
+                          --ok-label='Lock' \
+                          --text='Please confirm screen lock'\
+                            2>/dev/null
+        else
+          # shellcheck disable=SC1004
+          /bin/su "$username" \
+            -c '/usr/bin/zenity --question \
+                                --title="Confirm" \
+                                --cancel-label="Don'\''t lock" \
+                                --ok-label="Lock" \
+                                --text="Please confirm screen lock" \
+                                    2>/dev/null'
+        fi
+
+        dialog_response="$?"
+
+        if $dialog_response; then
           dialog_response='lock'
         else
           dialog_response='nolock'
@@ -432,6 +456,7 @@ if [[ ($action == 'remove' || $action == 'change') ]] && (! $found_key); then
 
       echodebug "no_lock: $no_lock"
     fi
+
 
     if ! $no_lock; then
       msg='[yubikey] locking screen'
