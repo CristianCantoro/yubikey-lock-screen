@@ -159,6 +159,8 @@ function parse_config() {
   done < "$configfile"
 }
 
+# TODO: move the expected response for the challenge-response from the key
+# from the authorized_yubikeys file to the lock file
 function preauth() {
 
   local username="$1"
@@ -170,6 +172,8 @@ function preauth() {
   echodebug "(preauth) serialno: $serialno"
   echodebug "(preauth) auth_file: $auth_file"
 
+  # TODO: move from authorized_yubikeys to lock
+  # the authorized_yubikeys will contain only the serial numbers
   if awk -F':' '{print $1}' "${auth_file}" | \
       grep -qE "^${serialno}$"; then
     echodebug '(preauth) return 0'
@@ -184,18 +188,21 @@ function chalresp() {
 
   local username="$1"
   local serialno="$2"
-  local yubikey_response
-  local expected_response
-  local auth_file
-  auth_file="/home/$username/.yubico/authorized_yubikeys"
 
   msg="[yubikey] yubiKey: ID_SERIAL_SHORT: $serialno - key preauthorized"
   echoinfo "$msg"
   logger "$msg"
 
+  # TODO: move from authorized_yubikeys to lock
+  # read the expected response from the lock file
+  local yubikey_response
+  local expected_response
+  local auth_file
+  auth_file="/home/$username/.yubico/authorized_yubikeys"
   yubikey_response="$(ykchalresp -2 -x "$serialno")"
   expected_response="$(grep -E "^${serialno}:" "${auth_file}" | \
                        awk -F':' '{print $2}')"
+
   if [[ "$yubikey_response" == "$expected_response" ]]; then
     echodebug '(chalresp) return 0'
     return 0
