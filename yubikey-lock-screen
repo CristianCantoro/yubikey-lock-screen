@@ -534,6 +534,9 @@ elif [[ $action == 'add' ]] && $found_key; then
   fi
 else
 
+  # This kind of scenario can happen if a non-authorized/spoofed key is
+  # inserted. We are logging them in the syslog, but maybe it is a good
+  # idea to log them elsewhere.
   if $found_key; then
     errormsg="[yubikey] key found with unexpected action '$action'. "
   else
