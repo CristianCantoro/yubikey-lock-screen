@@ -452,10 +452,9 @@ if [[ ($action == 'remove' || $action == 'change') ]] && (! $found_key); then
                                 --text="Please confirm screen lock" \
                                     2>/dev/null'
         fi
-
         dialog_response="$?"
 
-        if $dialog_response; then
+        if [[ "$dialog_response" == 0 ]]; then
           dialog_response='lock'
         else
           dialog_response='nolock'
