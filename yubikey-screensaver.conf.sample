@@ -1,0 +1,19 @@
+# yubikey-lock-screen configuration file
+#
+# Create a file named yubikey-screensarver.conf and put in
+# ~/.yubico/yubikey-screensaver
+#
+# Empty lines and lines starting with # are ignored
+
+# ask for confirmation for lock/unlock
+ask_confirmation = false
+
+# show warning popup when .nolock is present
+warn_nolock = false
+
+# period of time (in minutes) after which the ability of unlock the screen
+# with the yubikey expires
+unlock_timeout = 30
+
+# assume multiple keys can be used
+multikey = false
