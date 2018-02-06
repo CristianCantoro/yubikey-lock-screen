@@ -343,6 +343,7 @@ msg="[yubikey] screen_locked: $screen_locked"
 echoinfo "$msg"
 logger "$msg"
 
+# FIXME: use ykinfo instead of lsusb
 yubicokeys=$(lsusb | grep 'Yubico' | \
                      awk -F':' '{print $1}' | \
                      sed -r 's#Bus ([0-9]+) Device ([0-9]+)#\1:\2#g' || true )
